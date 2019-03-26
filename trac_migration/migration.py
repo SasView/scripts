@@ -108,6 +108,7 @@ class Migrator(object):
         '': 'sasview-bot',
     }
 
+
     # MAPPING = {
     #     'status': ['new', ], 
     #     'changetime', '_ts', 'description', 'reporter', 'cc', 'resolution', 'workpackage', 'time', 'component', 'summary', 'priority', 'keywords', 'milestone', 'owner', 'type']
@@ -129,6 +130,8 @@ class Migrator(object):
         #
         self.trac_issue_map = {}
 
+        self.GITHUB_TOKENS = eval(os.getenv("GITHUB-TOKENS"))
+
     def convert_ticket_id(self, trac_id):
         trac_id = int(trac_id)
         if trac_id in self.trac_issue_map:
@@ -137,6 +140,9 @@ class Migrator(object):
             return urljoin(self.trac_public_url, '/ticket/%d' % trac_id)
 
     def fix_wiki_syntax(self, markup):
+        '''
+        Convert wiki syntax to markdown
+        '''
         markup = re.sub(r'(?:refs #?|#)(\d+)', lambda i: self.convert_ticket_id(i.group(1)),
                         markup)
         markup = re.sub(r'#!CommitTicketReference.*rev=([^\s]+)\n', lambda i: i.group(1),
@@ -239,10 +245,13 @@ class Migrator(object):
         print("Creating GitHub tickets...")
         
         # TODO: Remove this
-        all_trac_tickets = all_trac_tickets[-4:-2]
+        #all_trac_tickets = all_trac_tickets[-4:-2]
 
         for trac_id, time_created, time_changed, attributes in all_trac_tickets:
-            print(80*"-")
+            #TODO: REMOVE
+            if trac_id is not 246:
+                continue
+            #
             # pprint(attributes)
             # print(80*"-")
             
@@ -293,7 +302,13 @@ class Migrator(object):
                     break
             else:
                 # otherwise creates the issue
-                gh_issue = self.github_repo.create_issue(title, assignee=assignee, body=body,
+
+                token = self.GITHUB_TOKENS[self.USER_NAME_MAP[attributes['reporter']]]
+                github = Github(token)
+                github_org = github.get_organization(os.getenv("GITHUB-ORGANISATION"))
+                github_repo = github_org.get_repo(os.getenv("GITHUB-REPO"))
+
+                gh_issue = github_repo.create_issue(title, assignee=assignee, body=body,
                                                          milestone=milestone, labels=labels)
                 self.gh_issues[title] = gh_issue
                 print("\tCreated issue: %s (%s)" % (title, gh_issue.html_url))
@@ -305,6 +320,9 @@ class Migrator(object):
         incomplete_label = self.get_gh_label('Incomplete Migration')
 
         for trac_id, time_created, time_changed, attributes in all_trac_tickets:
+            #TODO: Remove this
+            if trac_id is not 246:
+                continue
             gh_issue = trac_issue_map[int(trac_id)]
 
             if incomplete_label.url not in [i.url for i in gh_issue.labels]:
@@ -337,15 +355,23 @@ class Migrator(object):
                         body = '%s changed %s from "%s" to "%s"' % (
                             author, field, old_value, new_value)
 
-                comments.setdefault(time.value, []).append(body)
+                comments.setdefault( (time.value, author), []).append(body)
 
-            for time, values in sorted(comments.items()):
+            for (time, author), values in sorted(comments.items()):
                 if len(values) > 1:
                     fmt = "\n* %s" % "\n* ".join(values)
                 else:
                     fmt = "".join(values)
 
-                gh_issue.create_comment("Trac update at %s: %s" % (time, fmt))
+                #gh_issue.create_comment("Trac update at %s: %s" % (time, fmt))
+
+
+                token = self.GITHUB_TOKENS[self.USER_NAME_MAP[author]]
+                github = Github(token)
+                github_org = github.get_organization(os.getenv("GITHUB-ORGANISATION"))
+                github_repo = github_org.get_repo(os.getenv("GITHUB-REPO"))
+                gh_issue_permissions = github_repo.get_issue(gh_issue.number)
+                gh_issue_permissions.create_comment("Trac update at %s: %s" % (time, fmt))
 
             if attributes['status'] == "closed":
                 gh_issue.edit(state="closed")
