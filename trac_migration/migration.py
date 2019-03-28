@@ -1,10 +1,9 @@
+import difflib
 import json
 import os
 import re
 import sys
 import time
-import difflib
-
 from datetime import datetime
 from itertools import chain
 from pprint import pprint
@@ -20,6 +19,13 @@ Adapted from:
 https://github.com/robertoschwald/migrate-trac-issues-to-github/blob/master/migrate.py
 
 '''
+# This is the query used to pull the tickets from Trac
+# Component can be:
+# component=sasmodels
+# component=sasmodels+Markeplace
+# component=SansView&or&component=SasView
+# DON'T FORGET TO CHANGE THE REPO IN .env
+TRAC_TICKET_QUERY = "max=0&order=id&component=SasView"
 
 DEFAULT_GITHUB_USERNAME = "sasview-bot"
 
@@ -131,23 +137,27 @@ class Migrator(object):
         self.gh_milestones = {}
         self.gh_labels = {}
         self.gh_issues = {}
-        self.gh_repos = {} # This is a dic that contains gh user => repo login
-    
+        self.gh_repos = {}  # This is a dic that contains gh user => repo login
+
     def get_gh_repo(self, github_username):
         ''' Get the label from github. If it doesn't exist create it '''
         if github_username not in self.gh_repos:
-            self.gh_repos[github_username], _ = self._github_authentication(github_username)
+            self.gh_repos[github_username], _ = self._github_authentication(
+                github_username)
         return self.gh_repos[github_username]
 
     def _github_authentication(self, github_username):
         ''' authenticate github based on token given a user name
         '''
+        github_username = github_username.strip()
+        if github_username not in self.GITHUB_TOKENS:
+            github_username = DEFAULT_GITHUB_USERNAME
         token = self.GITHUB_TOKENS[github_username]
         github = Github(token)
         github_org = github.get_organization(os.getenv("GITHUB-ORGANISATION"))
         github_repo = github_org.get_repo(os.getenv("GITHUB-REPO"))
         return github_repo, github_org
-    
+
     def _get_github_username(self, trac_username):
         ''' Check if a close trac_username (difflib.get_close_matches) exists 
         in the dic USERNAME_MAP and returns it. 
@@ -231,7 +241,7 @@ class Migrator(object):
         print("Loading information from Trac...")
 
         get_all_tickets = MultiCall(self.trac)
-        for ticket in self.trac.ticket.query("max=0&order=id"):
+        for ticket in self.trac.ticket.query("max=0&order=id&component=SasView"):
             get_all_tickets.ticket.get(ticket)
 
         # Take the memory hit so we can rewrite ticket references:
@@ -247,13 +257,12 @@ class Migrator(object):
         print("Migrating descriptions and comments...")
         self.complete_github_issues(all_trac_tickets, trac_issue_map)
 
-
     @timeit
     def creat_incomplete_github_issues(self, all_trac_tickets, trac_issue_map):
         for trac_id, time_created, time_changed, attributes in all_trac_tickets:
 
             #TODO: REMOVE
-            if trac_id not in range(242,243):
+            if trac_id not in range(1245, 1250):
                 continue
 
             title = "%s (Trac #%d)" % (attributes['summary'], trac_id)
@@ -269,8 +278,9 @@ class Migrator(object):
 
             milestone = self.get_gh_milestone(attributes['milestone'])
 
-            assignee = self._get_github_username(attributes['owner'])
-            # The reporter must have special permissions to assign issues and labels!!!
+            assignee = '' if attributes['owner'].strip(
+            ) == '' else self._get_github_username(attributes['owner'])
+            # The reporter must have gh repo write permissions to assign issues and labels!!!
             reporter = self._get_github_username(attributes['reporter'])
 
             print("## Trac  #{:04d} \tAssignee GH: {} Reporter GH: {}.".format(
@@ -280,29 +290,31 @@ class Migrator(object):
             labels = ['Migrated from Trac', 'Incomplete Migration']
 
             labels.extend(
-                filter(None, (attributes['type'], attributes['component'])))
+                filter(None, (attributes['type'], attributes['workpackage'])))
             labels = list(map(self.get_gh_label, labels))
 
             # Let's find if our issue exists in the dic self.gh_issues.
             for i, j in self.gh_issues.items():
                 if i == title:
                     gh_issue = j
-                    print("** Issue #{:04d} \tExists already in self.gh_issues!".format(gh_issue.number))
+                    print(
+                        "** Issue #{:04d} \tExists already in self.gh_issues!".format(gh_issue.number))
                     # if the issue in the dic does not have an assignee or the assignee is diferent
                     if not gh_issue.assignee or gh_issue.assignee.login != assignee:
                         gh_issue.edit(assignee=assignee)
                     break
             else:
                 # If issue not found creates the issue
-                github_repo, _ = self._github_authentication(reporter)
-
+                #github_repo, _ = self._github_authentication(reporter)
+                github_repo = self.get_gh_repo(reporter)
                 gh_issue = github_repo.create_issue(title, assignee=assignee, body=body,
                                                     milestone=milestone, labels=labels)
                 self.gh_issues[title] = gh_issue
                 print("** Issue #{:04d} \tCreated issue remotely: {}. "
                       "\n\tWith Assignee: {}.\n\tWith labels: {}.\n"
                       "\tLabels created remotely: {}.".format(
-                          gh_issue.number, title, assignee, sorted([l.name for l in labels]), 
+                          gh_issue.number, title, assignee, sorted(
+                              [l.name for l in labels]),
                           sorted([l.name for l in gh_issue.labels])))
 
             trac_issue_map[int(trac_id)] = gh_issue
@@ -313,7 +325,7 @@ class Migrator(object):
 
         for trac_id, time_created, time_changed, attributes in all_trac_tickets:
             # TODO: Remove this
-            if trac_id not in range(242,243):
+            if trac_id not in range(1245, 1250):
                 continue
             gh_issue = trac_issue_map[int(trac_id)]
 
@@ -339,7 +351,7 @@ class Migrator(object):
                     if not new_value:
                         continue
                     body = '**%s** commented:\n\n%s\n\n' % (
-                        author, make_blockquote(self.fix_wiki_syntax(new_value)))
+                        author, self.fix_wiki_syntax(new_value))
                 else:
                     if "\n" in old_value or "\n" in new_value:
                         body = '**%s** changed %s from:\n\n%s\n\nto:\n\n%s\n\n' % (
@@ -360,7 +372,9 @@ class Migrator(object):
                 else:
                     fmt = "".join(values)
 
-                github_repo, _ = self._github_authentication(self._get_github_username(author))
+                #github_repo, _ = self._github_authentication(self._get_github_username(author))
+                github_repo = self.get_gh_repo(
+                    self._get_github_username(author))
 
                 gh_issue_permissions = github_repo.get_issue(gh_issue.number)
                 gh_issue_permissions.create_comment(
@@ -368,8 +382,7 @@ class Migrator(object):
 
             if attributes['status'] == "closed":
                 gh_issue.edit(state="closed")
-            print("Issue Done!")
-
+            print("\tIssue Done!")
 
     def print_github_team_members(self):
         ''' aux function '''
@@ -380,13 +393,14 @@ class Migrator(object):
             print(m.login, m.email)
 
     def print_trac_rpc_methods(self):
-        
+
         for method in self.trac.system.listMethods():
             print(method)
             print('\n'.join(['  ' + x for x in self.trac.system.methodHelp(
                              method).split('\n')]))
             print()
-            print()       
+            print()
+
 
 if __name__ == "__main__":
     m = Migrator()
