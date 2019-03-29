@@ -25,9 +25,9 @@ GITHUB_REPO_TRAC_QUERY_MAP = {
     # "sasview": "max=0&order=id&component=SansView&or&component=SasView",
     # 'sasmodels': 'max=0&order=id&component=sasmodels',
     # 'sasmodel-marketplace': 'max=0&order=id&component=sasmodels+Markeplace',
-    "temp": "max=0&order=id&component=SasView&owner=ricardo",
-    "temp2": "max=0&order=id&component=SasView&owner=butler",
-    
+    "temp": "max=0&order=id&owner=ricardo&status=accepted&status=assigned&status=new&status=reopened",
+    "temp2": "max=0&order=id&owner=ricardo&status=closed",
+
 }
 
 DEFAULT_GITHUB_USERNAME = "sasview-bot"
@@ -130,14 +130,20 @@ class Migrator(object):
         self.GITHUB_TOKENS = eval(os.getenv("GITHUB-TOKENS"))
 
         # Member variables
-        self.trac_issue_map = { repo: {} for repo in GITHUB_REPO_TRAC_QUERY_MAP} # repo : track ticket number : gh issue obj
-        self.gh_milestones = { repo: {} for repo in GITHUB_REPO_TRAC_QUERY_MAP} # Repo : milestone title : gh milestone obj
-        self.gh_labels = { repo: {} for repo in GITHUB_REPO_TRAC_QUERY_MAP} # Repo : label title : gh label obj
-        self.gh_issues = { repo: {} for repo in GITHUB_REPO_TRAC_QUERY_MAP} # Repo : issue title : igh ssue obj
-        self.gh_repos = { repo: {} for repo in GITHUB_REPO_TRAC_QUERY_MAP}  # repo : gh repo object (already logged in)
+        # repo : track ticket number : gh issue obj
+        self.trac_issue_map = {repo: {} for repo in GITHUB_REPO_TRAC_QUERY_MAP}
+        # Repo : milestone title : gh milestone obj
+        self.gh_milestones = {repo: {} for repo in GITHUB_REPO_TRAC_QUERY_MAP}
+        # Repo : label title : gh label obj
+        self.gh_labels = {repo: {} for repo in GITHUB_REPO_TRAC_QUERY_MAP}
+        # Repo : issue title : igh ssue obj
+        self.gh_issues = {repo: {} for repo in GITHUB_REPO_TRAC_QUERY_MAP}
+        # repo : gh repo object (already logged in)
+        self.gh_repos = {repo: {} for repo in GITHUB_REPO_TRAC_QUERY_MAP}
 
     def _github_authentication(self, github_username, repo_name):
         ''' authenticate github based on token given a user name
+        @returns a gh repo object authenticated
         '''
         github_username = github_username.strip()
         if github_username not in self.GITHUB_TOKENS:
@@ -160,21 +166,37 @@ class Migrator(object):
             trac_username = possible_trac_username[0]
         return USERNAME_MAP.get(trac_username, DEFAULT_GITHUB_USERNAME)
 
-    def convert_ticket_id(self, trac_id, ticket_repo, current_repo):
+    def convert_ticket_id(self, trac_id, current_repo_name):
         ''' Convert reference of trac ticked id to github issue number 
-        If track id is not in the map, return link to the old trac url'''
-        trac_id = int(trac_id)
-        
-        if trac_id in self.trac_issue_map:
-            return "#%s" % self.trac_issue_map[trac_id].number
-        else:
-            return urljoin(self.trac_public_url, '/ticket/%d' % trac_id)
+        If track id is not in the map, return link to the old trac url
+        If ticked id in the same repo => #n
+        otherwise => Organization_name/Repository# and issue or pull request number
+        '''
 
-    def fix_wiki_syntax(self, markup):
+        def find_issue(trac_id, d):
+            ''' return (repo_name, gh_issue) or None '''
+            for k, v in d.items():  # Dict of repo_names : dict(track_id, gh_issue)
+                for k2, v2 in v.items():  # track_id : gh_issue
+                    if trac_id == k2:
+                        return (k, v2)
+            return None
+
+        trac_id = int(trac_id)
+        # find the ticket:
+        result = find_issue(trac_id, self.trac_issue_map)
+        if result is None:
+            return urljoin(self.trac_public_url, '/ticket/{}'.format(trac_id))
+        elif current_repo_name == result[0]:
+            return "#{}".format(result[1].number)
+        else:
+            org_name = os.getenv("GITHUB-ORGANISATION")
+            return "{}/{}#{}".format(org_name, result[0], result[1].number)
+
+    def fix_wiki_syntax(self, markup, repo_name):
         '''
         Convert wiki syntax to markdown
         '''
-        markup = re.sub(r'(?:refs #?|#)(\d+)', lambda i: self.convert_ticket_id(i.group(1)),
+        markup = re.sub(r'(?:refs #?|#)(\d+)', lambda i: self.convert_ticket_id(i.group(1), repo_name),
                         markup)
         markup = re.sub(r'#!CommitTicketReference.*rev=([^\s]+)\n', lambda i: i.group(1),
                         markup, flags=re.MULTILINE)
@@ -188,79 +210,95 @@ class Migrator(object):
         markup = re.sub(r'\[changeset:"([^"/]+?)(?:/[^"]+)?"]',
                         r"changeset \1", markup)
         return markup
-    
+
     def get_gh_repo(self, github_username, repo_name):
         ''' Get the authenticated repo for github_username '''
         if github_username not in self.gh_repos[repo_name]:
-            self.gh_repos[repo_name][github_username], _ = self._github_authentication(
+            self.gh_repos[repo_name][github_username] = self._github_authentication(
                 github_username, repo_name)
         return self.gh_repos[repo_name][github_username]
 
-    def get_gh_milestone(self, milestone, repo_name, repo):
-        '''Must be created as admin'''
+    def get_gh_milestone(self, milestone, repo_name):
+        '''
+        @param milestone : milestone name
+        Creates a milestone in github if it does'nt exist
+        @return milestone object
+        '''
         if milestone.strip():
             if milestone not in self.gh_milestones[repo_name]:
                 print('-> Creating Milestone: {}'.format(milestone))
+                repo = self.get_gh_repo(DEFAULT_GITHUB_USERNAME, repo_name)
                 m = repo.create_milestone(milestone)
                 self.gh_milestones[repo_name][m.title] = m
             return self.gh_milestones[repo_name][milestone]
         else:
             return GithubObject.NotSet
 
-    def get_gh_label(self, label, repo_name, repo):
+    def get_gh_label(self, label, repo_name):
         ''' Get the label from github. If it doesn't exist create it '''
         if label not in self.gh_labels[repo_name]:
             print('-> Creating Label: {}'.format(label))
-            self.gh_labels[repo_name][label] = repo.create_label(label, color='FFFFFF')
+            repo = self.get_gh_repo(DEFAULT_GITHUB_USERNAME, repo_name)
+            self.gh_labels[repo_name][label] = repo.create_label(
+                label, color='FFFFFF')
         return self.gh_labels[repo_name][label]
 
     def run(self):
-        self.load_github()
-        self.migrate_tickets()
+        ''' Main cycle: iterates over all repos names and the respective queries '''
+        for repo_name, query in GITHUB_REPO_TRAC_QUERY_MAP.items():
+            self.load_github(repo_name)
+            self.migrate_tickets(repo_name, query)
 
     @timeit
-    def load_github(self):
+    def load_github(self, repo_name):
         '''
-        Create self.gh_* dictinaries indexed by title and with GH returns as values
+        Create self.gh_* dictinaries indexed by title and with GH objects
+        Creates issues 
         '''
-        print("Loading information from Github...")
-        repo = self.github_repo_admin
-        self.gh_milestones = {
+        print("Loading existing information on Github repo {}...".format(repo_name))
+        repo = self._github_authentication(DEFAULT_GITHUB_USERNAME, repo_name)
+        self.gh_milestones[repo_name] = {
             i.title: i for i in repo.get_milestones(state="all")}
-        self.gh_labels = {i.name: i for i in repo.get_labels()}
-        self.gh_issues = {i.title: i for i in repo.get_issues(state="all")}
+        self.gh_labels[repo_name] = {i.name: i for i in repo.get_labels()}
+        self.gh_issues[repo_name] = {
+            i.title: i for i in repo.get_issues(state="all")}
 
-        print("Read from GitHub: {} milestones, {} labels, {} issues.".format(
-            len(self.gh_milestones), len(self.gh_labels), len(self.gh_issues)
+        print("Read from GitHub Repo {}: {} milestones, {} labels, {} issues.".format(
+            repo_name, len(self.gh_milestones[repo_name]), len(
+                self.gh_labels[repo_name]), len(self.gh_issues[repo_name])
         ))
 
-    def migrate_tickets(self):
-        print("Loading information from Trac...")
+    def migrate_tickets(self, repo_name, query):
+        '''
+        Executes the trac query and calls the functions to initiate and terminate 
+        the GH migration
+        '''
+
+        print("Loading information from Trac query '{}' and migrating it to repo '{}'...".format(
+            query, repo_name))
 
         get_all_tickets = MultiCall(self.trac)
-        for ticket in self.trac.ticket.query("max=0&order=id&component=SasView"):
+        for ticket in self.trac.ticket.query(query):
             get_all_tickets.ticket.get(ticket)
 
         # Take the memory hit so we can rewrite ticket references:
         all_trac_tickets = list(get_all_tickets())
-
         print("Tickets loaded {}.".format(len(all_trac_tickets)))
 
         print("-"*80)
         print("Creating GitHub tickets now...")
-        self.creat_incomplete_github_issues(all_trac_tickets)
+        self.creat_incomplete_github_issues(all_trac_tickets, repo_name)
 
         print("-"*80)
         print("Migrating descriptions and comments...")
-        self.complete_github_issues(all_trac_tickets)
+        self.complete_github_issues(all_trac_tickets, repo_name)
 
     @timeit
-    def creat_incomplete_github_issues(self, all_trac_tickets):
+    def creat_incomplete_github_issues(self, all_trac_tickets, repo_name):
+        '''
+        Creates GH labels, milestones and tickets with label 'Incomplete Migration'
+        '''
         for trac_id, time_created, time_changed, attributes in all_trac_tickets:
-
-            #TODO: REMOVE
-            if trac_id not in range(1245, 1250):
-                continue
 
             title = "%s (Trac #%d)" % (attributes['summary'], trac_id)
 
@@ -273,10 +311,10 @@ class Migrator(object):
             body += "```json\n" + \
                 json.dumps(text_attributes, indent=4) + "\n```\n"
 
-            milestone = self.get_gh_milestone(attributes['milestone'])
+            milestone = self.get_gh_milestone(attributes['milestone'], repo_name)
 
-            assignee = '' if attributes['owner'].strip(
-            ) == '' else self._get_github_username(attributes['owner'])
+            assignee = '' if attributes['owner'].strip() == '' \
+                else self._get_github_username(attributes['owner'])
             # The reporter must have gh repo write permissions to assign issues and labels!!!
             reporter = self._get_github_username(attributes['reporter'])
 
@@ -284,18 +322,18 @@ class Migrator(object):
                 trac_id, assignee, reporter
             ))
 
-            labels = ['Migrated from Trac', 'Incomplete Migration']
+            labels = ['Migrated from Trac', 'Incomplete Migration', attributes['type'], 
+                       attributes['workpackage'], attributes['priority']]
+            labels = list(map(lambda label: self.get_gh_label(label, repo_name), labels))
 
-            labels.extend(
-                filter(None, (attributes['type'], attributes['workpackage'])))
-            labels = list(map(self.get_gh_label, labels))
+            # labels = list(map(self.get_gh_label, labels))
 
             # Let's find if our issue exists in the dic self.gh_issues.
-            for i, j in self.gh_issues.items():
+            for i, j in self.gh_issues[repo_name].items():
                 if i == title:
                     gh_issue = j
-                    print(
-                        "** Issue #{:04d} \tExists already in self.gh_issues!".format(gh_issue.number))
+                    print("** Issue #{:04d} \tExists already in gh_issues!".format(
+                        gh_issue.number))
                     # if the issue in the dic does not have an assignee or the assignee is diferent
                     if not gh_issue.assignee or gh_issue.assignee.login != assignee:
                         gh_issue.edit(assignee=assignee)
@@ -303,28 +341,29 @@ class Migrator(object):
             else:
                 # If issue not found creates the issue
                 #github_repo, _ = self._github_authentication(reporter)
-                github_repo = self.get_gh_repo(reporter)
+                github_repo = self.get_gh_repo(reporter, repo_name)
                 gh_issue = github_repo.create_issue(title, assignee=assignee, body=body,
                                                     milestone=milestone, labels=labels)
-                self.gh_issues[title] = gh_issue
+                self.gh_issues[repo_name][title] = gh_issue
                 print("** Issue #{:04d} \tCreated issue remotely: {}. "
                       "\n\tWith Assignee: {}.\n\tWith labels: {}.\n"
                       "\tLabels created remotely: {}.".format(
-                          gh_issue.number, title, assignee, sorted(
-                              [l.name for l in labels]),
+                          gh_issue.number, title, assignee,
+                          sorted([l.name for l in labels]),
                           sorted([l.name for l in gh_issue.labels])))
 
-            self.trac_issue_map[int(trac_id)] = gh_issue
+            self.trac_issue_map[repo_name][int(trac_id)] = gh_issue
 
     @timeit
-    def complete_github_issues(self, all_trac_tickets):
-        incomplete_label = self.get_gh_label('Incomplete Migration')
+    def complete_github_issues(self, all_trac_tickets, repo_name):
+        ''' Removes 'Incomplete Migration' from GH issues and update MD body
+        and adds the comments '''
+
+        incomplete_label = self.get_gh_label('Incomplete Migration', repo_name)
 
         for trac_id, time_created, time_changed, attributes in all_trac_tickets:
-            # TODO: Remove this
-            if trac_id not in range(1245, 1250):
-                continue
-            gh_issue = self.trac_issue_map[int(trac_id)]
+
+            gh_issue = self.trac_issue_map[repo_name][int(trac_id)]
 
             if incomplete_label.url not in [i.url for i in gh_issue.labels]:
                 print("!! Issue #{:04} \tExists remotely without '{}' label. Skipping it!".format(
@@ -336,8 +375,8 @@ class Migrator(object):
             print("-- Issue #{:04d} \tAdding body and comments remotely: {}".format(
                 gh_issue.number, gh_issue.title))
 
-            gh_issue.edit(body="%s\n\n%s" % (self.fix_wiki_syntax(
-                attributes['description']), gh_issue.body))
+            gh_issue.edit(body="{}\n\n{}".format(
+                self.fix_wiki_syntax(attributes['description'], repo_name), gh_issue.body))
 
             changelog = self.trac.ticket.changeLog(trac_id)
 
@@ -348,7 +387,7 @@ class Migrator(object):
                     if not new_value:
                         continue
                     body = '**%s** commented:\n\n%s\n\n' % (
-                        author, self.fix_wiki_syntax(new_value))
+                        author, self.fix_wiki_syntax(new_value, repo_name))
                 else:
                     if "\n" in old_value or "\n" in new_value:
                         body = '**%s** changed %s from:\n\n%s\n\nto:\n\n%s\n\n' % (
@@ -370,8 +409,7 @@ class Migrator(object):
                     fmt = "".join(values)
 
                 #github_repo, _ = self._github_authentication(self._get_github_username(author))
-                github_repo = self.get_gh_repo(
-                    self._get_github_username(author))
+                github_repo = self.get_gh_repo(self._get_github_username(author), repo_name)
 
                 gh_issue_permissions = github_repo.get_issue(gh_issue.number)
                 gh_issue_permissions.create_comment(
