@@ -25,9 +25,8 @@ GITHUB_REPO_TRAC_QUERY_MAP = {
     # "sasview": "max=0&order=id&component=SansView&or&component=SasView",
     # 'sasmodels': 'max=0&order=id&component=sasmodels',
     # 'sasmodel-marketplace': 'max=0&order=id&component=sasmodels+Markeplace',
-    "temp": "max=0&order=id&owner=ricardo&status=accepted&status=assigned&status=new&status=reopened",
-    "temp2": "max=0&order=id&owner=ricardo&status=closed",
-
+    "temp": "max=0&order=id&id=839",
+    "temp2": "max=0&order=id&id=1242&or&id=1243&or&id=1244",
 }
 
 DEFAULT_GITHUB_USERNAME = "sasview-bot"
@@ -90,6 +89,10 @@ def timeit(method):
 
 
 def remove_credentials_from_url(url):
+    '''
+    Removes the USERNAME:PASSWORD from a URL:
+    https://USERNAME:PASSWORD@trac.sasview.org
+    '''
     scheme, netloc, path, query, fragment = urlsplit(url)
 
     if '@' in netloc:
@@ -111,6 +114,7 @@ def convert_value_for_json(obj):
 
 
 def make_blockquote(text):
+    ''' Make a bloquote in MD'''
     return re.sub(r'^', '> ', text, flags=re.MULTILINE)
 
 
@@ -126,6 +130,7 @@ class Migrator(object):
         self.trac_public_url = remove_credentials_from_url(trac_url)
         trac_api_url = urljoin(trac_url, "/login/rpc")
         self.trac = ServerProxy(trac_api_url)
+        
         # GITHUB
         self.GITHUB_TOKENS = eval(os.getenv("GITHUB-TOKENS"))
 
@@ -246,6 +251,9 @@ class Migrator(object):
     def run(self):
         ''' Main cycle: iterates over all repos names and the respective queries '''
         for repo_name, query in GITHUB_REPO_TRAC_QUERY_MAP.items():
+            print("*"*80)
+            print("Processing <{}> to <{}>.".format(query, repo_name))
+            print("*"*80)
             self.load_github(repo_name)
             self.migrate_tickets(repo_name, query)
 
