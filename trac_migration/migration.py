@@ -22,11 +22,12 @@ https://github.com/robertoschwald/migrate-trac-issues-to-github/blob/master/migr
 # Only the queried tickets will stay at the mapped GH repo
 # github repo name : trac query
 GITHUB_REPO_TRAC_QUERY_MAP = {
-    # "sasview": "max=0&order=id&component=SansView&or&component=SasView",
-    # 'sasmodels': 'max=0&order=id&component=sasmodels',
-    # 'sasmodel-marketplace': 'max=0&order=id&component=sasmodels+Markeplace',
-    "temp": "max=0&order=id&id=839",
-    "temp2": "max=0&order=id&id=1242&or&id=1243&or&id=1244",
+    'sasmodel-marketplace': 'max=0&order=id&component=!SansView&component=!SasView&component=!sasmodels',
+    "sasview": "max=0&order=id&component=SansView&or&component=SasView",
+    'sasmodels': 'max=0&order=id&component=sasmodels',
+    #'sasmodel-marketplace': 'max=0&order=id&component=sasmodels%20Markeplace',
+    #"temp": "max=0&order=id&id=839",
+    #"temp2": "max=0&order=id&id=1242&or&id=1243&or&id=1244",
 }
 
 DEFAULT_GITHUB_USERNAME = "sasview-bot"
@@ -250,56 +251,54 @@ class Migrator(object):
 
     def run(self):
         ''' Main cycle: iterates over all repos names and the respective queries '''
-        for repo_name, query in GITHUB_REPO_TRAC_QUERY_MAP.items():
-            print("*"*80)
-            print("Processing <{}> to <{}>.".format(query, repo_name))
-            print("*"*80)
-            self.load_github(repo_name)
-            self.migrate_tickets(repo_name, query)
+        
+        self.load_github()
+        self.migrate_tickets()
 
     @timeit
-    def load_github(self, repo_name):
+    def load_github(self):
         '''
         Create self.gh_* dictinaries indexed by title and with GH objects
         Creates issues 
         '''
-        print("Loading existing information on Github repo {}...".format(repo_name))
-        repo = self._github_authentication(DEFAULT_GITHUB_USERNAME, repo_name)
-        self.gh_milestones[repo_name] = {
-            i.title: i for i in repo.get_milestones(state="all")}
-        self.gh_labels[repo_name] = {i.name: i for i in repo.get_labels()}
-        self.gh_issues[repo_name] = {
-            i.title: i for i in repo.get_issues(state="all")}
+        for repo_name, query in GITHUB_REPO_TRAC_QUERY_MAP.items():
+            print("Loading existing information on Github repo {}...".format(repo_name))
+            repo = self._github_authentication(DEFAULT_GITHUB_USERNAME, repo_name)
+            self.gh_milestones[repo_name] = {
+                i.title: i for i in repo.get_milestones(state="all")}
+            self.gh_labels[repo_name] = {i.name: i for i in repo.get_labels()}
+            self.gh_issues[repo_name] = {
+                i.title: i for i in repo.get_issues(state="all")}
 
-        print("Read from GitHub Repo {}: {} milestones, {} labels, {} issues.".format(
-            repo_name, len(self.gh_milestones[repo_name]), len(
-                self.gh_labels[repo_name]), len(self.gh_issues[repo_name])
-        ))
+            print("Read from GitHub Repo {}: {} milestones, {} labels, {} issues.".format(
+                repo_name, len(self.gh_milestones[repo_name]), len(
+                    self.gh_labels[repo_name]), len(self.gh_issues[repo_name])
+            ))
 
-    def migrate_tickets(self, repo_name, query):
+    def migrate_tickets(self):
         '''
         Executes the trac query and calls the functions to initiate and terminate 
         the GH migration
         '''
+        for repo_name, query in GITHUB_REPO_TRAC_QUERY_MAP.items():
+            print("Loading information from Trac query '{}' and migrating it to repo '{}'...".format(
+                query, repo_name))
 
-        print("Loading information from Trac query '{}' and migrating it to repo '{}'...".format(
-            query, repo_name))
+            get_all_tickets = MultiCall(self.trac)
+            for ticket in self.trac.ticket.query(query):
+                get_all_tickets.ticket.get(ticket)
 
-        get_all_tickets = MultiCall(self.trac)
-        for ticket in self.trac.ticket.query(query):
-            get_all_tickets.ticket.get(ticket)
+            # Take the memory hit so we can rewrite ticket references:
+            all_trac_tickets = list(get_all_tickets())
+            print("Tickets loaded {}.".format(len(all_trac_tickets)))
 
-        # Take the memory hit so we can rewrite ticket references:
-        all_trac_tickets = list(get_all_tickets())
-        print("Tickets loaded {}.".format(len(all_trac_tickets)))
+            print("-"*80)
+            print("Creating GitHub tickets now...")
+            self.creat_incomplete_github_issues(all_trac_tickets, repo_name)
 
-        print("-"*80)
-        print("Creating GitHub tickets now...")
-        self.creat_incomplete_github_issues(all_trac_tickets, repo_name)
-
-        print("-"*80)
-        print("Migrating descriptions and comments...")
-        self.complete_github_issues(all_trac_tickets, repo_name)
+            print("-"*80)
+            print("Migrating descriptions and comments...")
+            self.complete_github_issues(all_trac_tickets, repo_name)
 
     @timeit
     def creat_incomplete_github_issues(self, all_trac_tickets, repo_name):
@@ -330,8 +329,9 @@ class Migrator(object):
                 trac_id, assignee, reporter
             ))
 
-            labels = ['Migrated from Trac', 'Incomplete Migration', attributes['type'], 
-                       attributes['workpackage'], attributes['priority']]
+            labels = ['Migrated from Trac', 'Incomplete Migration', attributes.get('type', None), 
+                       attributes.get('workpackage', None), attributes.get('priority', None)]
+            labels = list(filter(None, labels))
             labels = list(map(lambda label: self.get_gh_label(label, repo_name), labels))
 
             # labels = list(map(self.get_gh_label, labels))
