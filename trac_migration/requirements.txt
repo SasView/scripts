@@ -1,2 +1,10 @@
+# Common
 python-dotenv
+
+# For issue migration
 PyGithub
+
+# For the wiki
+beautifulsoup4
+bleach
+
