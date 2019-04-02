@@ -9,7 +9,6 @@ import shlex
 
 from lxml.html import clean
 from dotenv import load_dotenv
-from html_sanitizer import Sanitizer, sanitizer
 import pypandoc
 from bs4 import BeautifulSoup, Comment
 from multiprocessing import Pool
@@ -47,29 +46,13 @@ OUTPUT_DIRECTORY = "out"
 # load .env file
 load_dotenv()
 
-# HTML Sanitizer options
-# Make a copy
-mysettings = dict(sanitizer.DEFAULT_SETTINGS)
-# Add your changes
-mysettings['tags'].update(['img', 'table', 'tr', 'th', 'td', 'pre'])
-mysettings['empty'].update(['img', 'table', 'tr', 'th', 'td'])
-mysettings['separate'].update(['tr', 'th', 'td'])
-mysettings['attributes'].update({
-    'img': ('src', ),
-    'td': ('style', )
-})
 
 def process_single_file(page):
     
     # TODO remove
-    # if page not in ["ListofModels", 'WikiStart']:
+    # matches = ["ListofModels", 'WikiStart', "CondaDevSetup"]
+    # if not any(s in page for s in matches):
     #     return
-
-    trac_url = os.getenv("TRAC-URL")
-    rpc_url = urllib.parse.urljoin(trac_url, 'login/xmlrpc')
-    trac = xmlrpc.client.ServerProxy(rpc_url)
-
-    mysanitizer = Sanitizer(settings=mysettings) 
     
     filename = f'{page}.html'.lstrip('/')
     filename = filename.replace('/', '_')
@@ -79,6 +62,9 @@ def process_single_file(page):
     dir = os.path.dirname(filename)
     dir and os.makedirs(dir, exist_ok=True)
     with open(filename, 'w') as f:
+        trac_url = os.getenv("TRAC-URL")
+        rpc_url = urllib.parse.urljoin(trac_url, 'login/xmlrpc')
+        trac = xmlrpc.client.ServerProxy(rpc_url)
         # doc is a string
         doc = trac.wiki.getPageHTML(page)
 
@@ -88,7 +74,7 @@ def process_single_file(page):
 
         #doc = mysanitizer.sanitize(doc)
         cleaner = Cleaner(tags=bleach.sanitizer.ALLOWED_TAGS+[
-            'pre', 'table', 'tr', 'td', 'th',
+            'pre', 'table', 'tr', 'td', 'th', 'tt', 'dl', 'dt', 'dd',
             "a", "h1", "h2", "h3", "strong", "em", "p", "ul", "ol",
             "li", "br", "sub", "sup", "hr"], strip=True, strip_comments=True)
         doc = cleaner.clean(doc)
@@ -109,24 +95,25 @@ def process_single_file(page):
         doc = soup.prettify()
         
         f.write(doc)
-    return filename
 
 def main():
-    
+
     trac_url = os.getenv("TRAC-URL")
     rpc_url = urllib.parse.urljoin(trac_url, 'login/xmlrpc')
     trac = xmlrpc.client.ServerProxy(rpc_url)
 
     pages  = list(trac.wiki.getAllPages())
     with Pool(NUMBER_OF_CORES) as p:
-        print(p.map(process_single_file, pages))
-        
+        p.map(process_single_file, pages)
         
     # script to convert html to md and update github
     script = '''cd /Users/rhf/git/sasview_scripts/trac_migration/out
 for f in *.html; do
+    if [ "$f" == "*_orig.md" ] ; then
+        continue;
+    fi
     outfile="${f/.html/.md}"
-    command="/usr/local/bin/pandoc -s '$f' -t markdown-simple_tables-multiline_tables-pipe_tables -o '$outfile'"
+    command="/usr/local/bin/pandoc -s '$f' -t markdown-simple_tables-multiline_tables-grid_tables --wrap=none --column=999 -o '$outfile'"
     echo "$command"
     output=$(eval "$command")
     echo "$output"
