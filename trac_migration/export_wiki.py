@@ -109,7 +109,7 @@ def main():
     # script to convert html to md and update github
     script = '''cd /Users/rhf/git/sasview_scripts/trac_migration/out
 for f in *.html; do
-    if [ "$f" == "*_orig.md" ] ; then
+    if [ "$f" == "*_orig.html" ] ; then
         continue;
     fi
     outfile="${f/.html/.md}"
@@ -121,8 +121,8 @@ done
 if [ -f WikiStart.md ]; then
     mv WikiStart.md Home.md
 fi
-cp *.md /tmp/temp.wiki/
-cd /tmp/temp.wiki/
+cp *.md /tmp/sasview.wiki/
+cd /tmp/sasview.wiki/
 git add .
 date=$(date)
 git commit -m 'Added MD script ${date}'
