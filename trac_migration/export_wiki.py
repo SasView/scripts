@@ -54,32 +54,32 @@ DEFAULT_GITHUB_USERNAME = "sasview-bot"
 load_dotenv()
 
 
-
-
 def update_issues_map():
     '''
     Query github and gets a map of 
     [ticket number] = (repo name, issue_number)
     '''
-    
+
     github_username = DEFAULT_GITHUB_USERNAME
     GITHUB_TOKENS = eval(os.getenv("GITHUB-TOKENS"))
     token = GITHUB_TOKENS[github_username]
     github = Github(token)
     github_org = github.get_organization(os.getenv("GITHUB-ORGANISATION"))
-    
+
     repos = ["sasview", 'sasmodels', 'sasmodel-marketplace']
     issues_map = {}
     for repo_name in repos:
         print("Updating issues map with the repository:", repo_name)
         github_repo = github_org.get_repo(repo_name)
-        for i in github_repo.get_issues(state="all") :
+        for i in github_repo.get_issues(state="all"):
             ticket_number = re.findall('.*\(Trac #(\d+)\)',  i.title)
             if ticket_number:
                 issues_map[int(ticket_number[0])] = (repo_name, i.number)
     return issues_map
 
+
 issues_map = update_issues_map()
+
 
 def update_ticket_link_to_gh_issues(text):
     '''
@@ -87,34 +87,41 @@ def update_ticket_link_to_gh_issues(text):
     with: Sasview/{REPO}#{####} 
     '''
 
-    #pattern = r'https*:\/\/trac\.sasview\.org\/ticket\/(\d+)\/*'
-    pattern = r"""<a.*href=["']https*:\/\/trac\.sasview\.org\/ticket\/(\d+)\/*["'].*>(.+)<\/a>"""
-    
+    # Pattern to find in the text
+    pattern = r"""<a.*href=["'](https*:\/\/trac\.sasview\.org)?\/ticket\/(\d+)\/*["'].*>(.+)<\/a>"""
+
     # Regex here!!!
     def replacer(match):
-        ''' To replace in the matched groups. Only way that I found....'''
+        ''' To replace in the matched groups. Only way that I found....
+        group 2 = ticket number
+        group 3 = Description of the link
+        '''
 
-        repo_name, issue_number = issues_map.get(int(match.group(1)), (None, None))
-        # /user/project/issues/1
-        #to_replace = 'SasView/{}#{}'.format(repo_name, issue_number)
-        to_replace = r'<a href="/SasView/{0}/issues/{1}">SasView/{0}#{1}</a>'.format(repo_name, issue_number)
+        repo_name, issue_number = issues_map.get(
+            int(match.group(2)), (None, None))
+        # To every found <a> this is the substitution link
+        if match.group(3).startswith('#'):
+            to_replace = r'<a href="/SasView/{0}/issues/{1}">SasView/{0}#{1}</a>'.format(repo_name, issue_number)
+        else:
+            to_replace = r'<a href="/SasView/{0}/issues/{1}">{2}</a>'.format(repo_name, issue_number, match.group(3))
         return to_replace
 
     text_corrected = re.sub(pattern, replacer, text)
     return text_corrected
 
+
 def process_single_file(page):
-    
+
     # # TODO remove
     # matches = [
-    # # "ListofModels", 
-    # # 'WikiStart', 
+    # # "ListofModels",
+    # # 'WikiStart',
     # # "CondaDevSetup",
     #     "TutorialsTNG",
     # ]
     # if not any(s in page for s in matches):
     #     return
-    
+
     filename = f'{page}.html'.lstrip('/')
     filename = filename.replace('/', '_')
     filename = os.path.join(OUTPUT_DIRECTORY, filename)
@@ -130,9 +137,9 @@ def process_single_file(page):
         doc = trac.wiki.getPageHTML(page)
 
         # Write a copy of the original
-        with open(filename.replace(".html","_orig.html"), 'w') as f2:
+        with open(filename.replace(".html", "_orig.html"), 'w') as f2:
             f2.write(doc)
-        
+
         doc = update_ticket_link_to_gh_issues(doc)
 
         #doc = mysanitizer.sanitize(doc)
@@ -141,7 +148,7 @@ def process_single_file(page):
             "a", "h1", "h2", "h3", "strong", "em", "p", "ul", "ol",
             "li", "br", "sub", "sup", "hr"], strip=True, strip_comments=True)
         doc = cleaner.clean(doc)
-        
+
         # Regex here!!!
         def replacer(match):
             ''' To replace in the matched groups. Only way that I found....'''
@@ -153,13 +160,11 @@ def process_single_file(page):
         doc = re.sub(
             r'''href=\"http://trac\.sasview\.org/wiki/([a-zA-Z0-9/]+)(#[a-zA-Z0-9]+)?\"''',
             replacer, doc)
-        
+
         soup = BeautifulSoup(doc, features="lxml")
         doc = soup.prettify()
-        
+
         f.write(doc)
-
-
 
 
 def main():
@@ -168,10 +173,10 @@ def main():
     rpc_url = urllib.parse.urljoin(trac_url, 'login/xmlrpc')
     trac = xmlrpc.client.ServerProxy(rpc_url)
 
-    pages  = list(trac.wiki.getAllPages())
+    pages = list(trac.wiki.getAllPages())
     with Pool(NUMBER_OF_CORES) as p:
         p.map(process_single_file, pages)
-        
+
     # script to convert html to md and update github
     script = '''cd /Users/rhf/git/sasview_scripts/trac_migration/out
 for f in *.html; do
@@ -198,5 +203,6 @@ cd /Users/rhf/git/sasview_scripts/trac_migration
     '''
 
     os.system(script)
+
 
 __name__ == '__main__' and main()
