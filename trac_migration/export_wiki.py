@@ -117,7 +117,7 @@ def process_single_file(page):
     # # "ListofModels",
     # # 'WikiStart',
     # # "CondaDevSetup",
-    #     "TutorialsTNG",
+    #     "Tutorials/KU/SAS",
     # ]
     # if not any(s in page for s in matches):
     #     return
@@ -142,24 +142,38 @@ def process_single_file(page):
 
         doc = update_ticket_link_to_gh_issues(doc)
 
-        #doc = mysanitizer.sanitize(doc)
-        cleaner = Cleaner(tags=bleach.sanitizer.ALLOWED_TAGS+[
-            'pre', 'table', 'tr', 'td', 'th', 'tt', 'dl', 'dt', 'dd',
-            "a", "h1", "h2", "h3", "strong", "em", "p", "ul", "ol",
-            "li", "br", "sub", "sup", "hr"], strip=True, strip_comments=True)
+        attributes = bleach.sanitizer.ALLOWED_ATTRIBUTES
+        attributes.update({
+                'img': ['alt', 'src']})
+        cleaner = Cleaner(
+            tags=bleach.sanitizer.ALLOWED_TAGS+[
+                'pre', 'table', 'tr', 'td', 'th', 'tt', 'dl', 'dt', 'dd',
+                "a", "h1", "h2", "h3", "strong", "em", "p", "ul", "ol",
+                "li", "br", "sub", "sup", "hr", "img"], 
+            attributes=attributes,
+            strip=True, strip_comments=True)
         doc = cleaner.clean(doc)
 
-        # Regex here!!!
+        # Update the links to other pages
         def replacer(match):
             ''' To replace in the matched groups. Only way that I found....'''
             return 'href="{}{}"'.format(
                 match.group(1),
                 match.group(2) if match.group(2) is not None else ''
             ).replace('/', '_')
-
         doc = re.sub(
             r'''href=\"http://trac\.sasview\.org/wiki/([a-zA-Z0-9/]+)(#[a-zA-Z0-9]+)?\"''',
             replacer, doc)
+
+        # Update the links to attachments
+        # 
+        def replace_attachments(match):
+            ''' To replace in the matched groups. Only way that I found....'''
+            filename = match.group(3).replace('/', '_')
+            return '{}="attachments/{}"'.format(match.group(1), filename)
+        doc = re.sub(
+            r'(href|src)=\"https?://trac\.sasview\.org\/(raw-attachment|attachment)\/wiki\/([a-zA-Z0-9\/\._]+)\"',
+            replace_attachments, doc)
 
         soup = BeautifulSoup(doc, features="lxml")
         doc = soup.prettify()
@@ -192,10 +206,10 @@ done
 if [ -f WikiStart.md ]; then
     mv WikiStart.md Home.md
 fi
-cp *.md /tmp/sasview.wiki/
+# cp *.md /tmp/sasview.wiki/
+rsync -av --progress *.md /tmp/sasview.wiki/ --exclude "*_orig.*"
 cd /tmp/sasview.wiki/
 git add .
-date=$(date)
 git commit -m 'Added MD script'
 git push
 cd /Users/rhf/git/sasview_scripts/trac_migration
