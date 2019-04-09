@@ -7,4 +7,4 @@ PyGithub
 # For the wiki
 beautifulsoup4
 bleach
-
+lxml
