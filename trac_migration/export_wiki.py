@@ -88,7 +88,7 @@ def update_ticket_link_to_gh_issues(text):
     '''
 
     # Pattern to find in the text
-    pattern = r"""<a.*href=["'](https*:\/\/trac\.sasview\.org)?\/ticket\/(\d+)\/*["'].*>(.+)<\/a>"""
+    pattern = r"<a.*href=[\"'](https*:\/\/trac\.sasview\.org)?\/ticket\/(\d+)\/*[\"'].*>(.+)<\/a>"
 
     # Regex here!!!
     def replacer(match):
@@ -100,7 +100,7 @@ def update_ticket_link_to_gh_issues(text):
         repo_name, issue_number = issues_map.get(
             int(match.group(2)), (None, None))
         # To every found <a> this is the substitution link
-        if match.group(3).startswith('#'):
+        if match.group(3).startswith('#') or "trac.sasview.org" in match.group(3):
             to_replace = r'<a href="/SasView/{0}/issues/{1}">SasView/{0}#{1}</a>'.format(repo_name, issue_number)
         else:
             to_replace = r'<a href="/SasView/{0}/issues/{1}">{2}</a>'.format(repo_name, issue_number, match.group(3))
@@ -117,7 +117,8 @@ def process_single_file(page):
     # # "ListofModels",
     # # 'WikiStart',
     # # "CondaDevSetup",
-    #     "Tutorials/KU/SAS",
+    # # "Tutorials/KU/SAS",
+    #     "TutorialsTNG",
     # ]
     # if not any(s in page for s in matches):
     #     return
